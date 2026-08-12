@@ -1,0 +1,93 @@
+services:
+  # -------------------------------------------------
+  # Ollama – LLM service (shared network only)
+  # -------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: crossnet-ollama
+    volumes:
+      - ollama_data:/root/.ollama          # persist models
+    networks:
+      - net_shared
+    # Optional: expose to host if you want to use it from Windows too
+    # ports:
+    #   - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # -------------------------------------------------
+  # Shared relay
+  # -------------------------------------------------
+  relay:
+    build: .
+    command: ["python", "discovery_server.py", "8888"]
+    networks:
+      - net_shared
+    ports:
+      - "8888:8888"
+    depends_on:
+      - ollama
+
+  # -------------------------------------------------
+  # Agent B
+  # -------------------------------------------------
+  agent_b:
+    build: .
+    command:
+      [
+        "python", "agent_b.py",
+        "--relay", "http://relay:8888",
+        "--topic", "knowledge",
+        "--rounds", "3"
+      ]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434    # ← important!
+    depends_on:
+      relay:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+    networks:
+      - net_b
+      - net_shared
+
+  # -------------------------------------------------
+  # Agent A
+  # -------------------------------------------------
+  agent_a:
+    build: .
+    command:
+      [
+        "python", "agent_a.py",
+        "--relay", "http://relay:8888",
+        "--discover", "http://relay:8888",
+        "--topic", "knowledge",
+        "--rounds", "3"
+      ]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434    # ← important!
+    depends_on:
+      relay:
+        condition: service_started
+      agent_b:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+    networks:
+      - net_a
+      - net_shared
+
+networks:
+  net_a:
+    driver: bridge
+  net_b:
+    driver: bridge
+  net_shared:
+    driver: bridge
+
+volumes:
+  ollama_data:                            # keeps downloaded models
